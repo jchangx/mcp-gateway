@@ -6,6 +6,29 @@ import (
 	"strings"
 )
 
+const (
+	// DefaultBaseURL is the base URL for the community MCP registry
+	DefaultBaseURL = "https://registry.modelcontextprotocol.io"
+	// DefaultAPIVersion is the default API version for the community MCP registry
+	DefaultAPIVersion = "v0"
+)
+
+// NewServerURL creates a ServerURL from a server identifier and optional version.
+// The identifier should be in the format "namespace/server-name".
+// If version is empty, it defaults to "latest".
+func NewServerURL(identifier string, version string) *ServerURL {
+	encodedIdentifier := strings.ReplaceAll(identifier, "/", "%2F")
+	if version == "" {
+		version = "latest"
+	}
+	return &ServerURL{
+		BaseURL:    DefaultBaseURL,
+		APIVersion: DefaultAPIVersion,
+		ServerName: encodedIdentifier,
+		Version:    version,
+	}
+}
+
 // ServerURL represents a parsed MCP registry URL
 type ServerURL struct {
 	// BaseURL is the host plus anything before the API version (e.g., "https://registry.modelcontextprotocol.io")

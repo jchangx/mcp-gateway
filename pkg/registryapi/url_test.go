@@ -238,3 +238,40 @@ func TestServerURL_WithVersion(t *testing.T) {
 		})
 	}
 }
+
+func TestNewServerURL(t *testing.T) {
+	tests := []struct {
+		name       string
+		identifier string
+		version    string
+		want       string
+	}{
+		{
+			name:       "basic identifier without version",
+			identifier: "io.github.user/myserver",
+			version:    "",
+			want:       "https://registry.modelcontextprotocol.io/v0/servers/io.github.user%2Fmyserver/versions/latest",
+		},
+		{
+			name:       "basic identifier with version",
+			identifier: "io.github.user/myserver",
+			version:    "1.0.0",
+			want:       "https://registry.modelcontextprotocol.io/v0/servers/io.github.user%2Fmyserver/versions/1.0.0",
+		},
+		{
+			name:       "identifier with latest version",
+			identifier: "ai.aliengiraffe/spotdb",
+			version:    "latest",
+			want:       "https://registry.modelcontextprotocol.io/v0/servers/ai.aliengiraffe%2Fspotdb/versions/latest",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := NewServerURL(tt.identifier, tt.version)
+			require.Equal(t, tt.want, got.String())
+			require.Equal(t, DefaultBaseURL, got.BaseURL)
+			require.Equal(t, DefaultAPIVersion, got.APIVersion)
+		})
+	}
+}

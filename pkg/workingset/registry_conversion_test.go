@@ -460,7 +460,7 @@ func TestCommunityIdentifierToRegistryURL(t *testing.T) {
 		{
 			name:       "basic identifier",
 			identifier: "io.github.user/myserver",
-			expected:   "https://registry.modelcontextprotocol.io/v0/servers/io.github.user%2Fmyserver",
+			expected:   "https://registry.modelcontextprotocol.io/v0/servers/io.github.user%2Fmyserver/versions/latest",
 		},
 		{
 			name:       "identifier with version",

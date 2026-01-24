@@ -738,9 +738,6 @@ func inferJSONType(format string) string {
 	}
 }
 
-// CommunityRegistryBaseURL is the base URL for the community MCP registry
-const CommunityRegistryBaseURL = "https://registry.modelcontextprotocol.io"
-
 // communityIdentifierToRegistryURL converts a community:// identifier to a full registry URL
 // Format: community://namespace/server-name[@version]
 // Examples:
@@ -759,14 +756,7 @@ func communityIdentifierToRegistryURL(identifier string) (string, error) {
 		return "", fmt.Errorf("invalid community identifier %q: expected format namespace/server-name", identifier)
 	}
 
-	// URL encode the identifier (the slash between namespace and name becomes %2F)
-	encodedIdentifier := strings.ReplaceAll(identifier, "/", "%2F")
-
-	// Build the URL
-	if version != "" {
-		return fmt.Sprintf("%s/v0/servers/%s/versions/%s", CommunityRegistryBaseURL, encodedIdentifier, version), nil
-	}
-	return fmt.Sprintf("%s/v0/servers/%s", CommunityRegistryBaseURL, encodedIdentifier), nil
+	return registryapi.NewServerURL(identifier, version).String(), nil
 }
 
 func ResolveRegistry(ctx context.Context, registryClient registryapi.Client, value string) (Server, error) {
