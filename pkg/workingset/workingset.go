@@ -15,6 +15,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	v0 "github.com/modelcontextprotocol/registry/pkg/api/v0"
+	"github.com/modelcontextprotocol/registry/pkg/model"
 	"gopkg.in/yaml.v3"
 
 	"github.com/docker/mcp-gateway/pkg/catalog"
@@ -394,16 +395,11 @@ func ResolveServersFromString(ctx context.Context, registryClient registryapi.Cl
 	} else if v, ok := strings.CutPrefix(value, "catalog://"); ok {
 		return ResolveCatalogServers(ctx, dao, v)
 	} else if strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") { // Assume registry entry if it's a URL
-		url, err := ResolveRegistry(ctx, registryClient, value)
+		server, err := ResolveRegistry(ctx, registryClient, value)
 		if err != nil {
 			return nil, fmt.Errorf("failed to resolve registry: %w", err)
 		}
-		return []Server{{
-			Type:    ServerTypeRegistry,
-			Source:  url,
-			Secrets: "default",
-			// TODO(cody): add snapshot
-		}}, nil
+		return []Server{server}, nil
 	} else if v, ok := strings.CutPrefix(value, "file://"); ok {
 		return ResolveFile(v)
 	}
@@ -555,53 +551,228 @@ func ResolveImageRef(ctx context.Context, ociService oci.Service, value string) 
 	return fullRef, nil
 }
 
-func ResolveRegistry(ctx context.Context, registryClient registryapi.Client, value string) (string, error) {
+// convertRegistryServerToCatalog converts a community MCP registry server to Docker catalog format
+// Only processes OCI packages (non-OCI packages are ignored)
+func convertRegistryServerToCatalog(serverResp *v0.ServerResponse) (catalog.Server, error) {
+	server := serverResp.Server
+
+	// Find OCI packages
+	var ociPackages []catalog.Server
+	for _, pkg := range server.Packages {
+		if pkg.RegistryType != "oci" {
+			continue
+		}
+
+		catalogSrv := catalog.Server{
+			Type:        "server",
+			Image:       pkg.Identifier,
+			Description: server.Description,
+			Title:       server.Title,
+		}
+
+		// Extract icon (use first icon if available)
+		if len(server.Icons) > 0 {
+			catalogSrv.Icon = server.Icons[0].Src
+		}
+
+		// Parse runtime arguments for volumes and user settings
+		for _, arg := range pkg.RuntimeArguments {
+			if arg.Type == model.ArgumentTypeNamed {
+				switch arg.Name {
+				case "-v", "--volume":
+					if arg.Value != "" {
+						catalogSrv.Volumes = append(catalogSrv.Volumes, arg.Value)
+					}
+				case "-u", "--user":
+					if arg.Value != "" {
+						catalogSrv.User = arg.Value
+					}
+				}
+			}
+		}
+
+		// Convert package arguments to command array
+		for _, arg := range pkg.PackageArguments {
+			if arg.Value != "" {
+				catalogSrv.Command = append(catalogSrv.Command, arg.Value)
+			}
+		}
+
+		// Process environment variables - separate secrets from config
+		var secrets []catalog.Secret
+		var envVars []catalog.Env
+		var configItems []any
+
+		for _, envVar := range pkg.EnvironmentVariables {
+			if envVar.IsSecret {
+				// Create secret
+				secretName := strings.ToLower(envVar.Name)
+				secrets = append(secrets, catalog.Secret{
+					Name: secretName,
+					Env:  envVar.Name,
+				})
+			} else if envVar.IsRequired || envVar.Default != "" || envVar.Value != "" {
+				// Check if this has variables (configuration item)
+				if len(envVar.Variables) > 0 {
+					// This is a complex config with nested variables
+					properties := make(map[string]any)
+					required := []string{}
+
+					for varName, varInput := range envVar.Variables {
+						prop := map[string]any{
+							"type":        inferJSONType(string(varInput.Format)),
+							"description": varInput.Description,
+						}
+						if varInput.Default != "" {
+							prop["default"] = varInput.Default
+						}
+						if varInput.Placeholder != "" {
+							prop["placeholder"] = varInput.Placeholder
+						}
+						if len(varInput.Choices) > 0 {
+							prop["enum"] = varInput.Choices
+						}
+						properties[varName] = prop
+
+						if varInput.IsRequired {
+							required = append(required, varName)
+						}
+					}
+
+					configItem := map[string]any{
+						"name":        envVar.Name,
+						"description": envVar.Description,
+						"type":        "object",
+						"properties":  properties,
+					}
+					if len(required) > 0 {
+						configItem["required"] = required
+					}
+					configItems = append(configItems, configItem)
+				} else {
+					// Simple environment variable
+					envVars = append(envVars, catalog.Env{
+						Name:  envVar.Name,
+						Value: envVar.Value,
+					})
+
+					// Also add to config if it doesn't have a value (needs user input)
+					if envVar.Value == "" || strings.Contains(envVar.Value, "{") {
+						configItem := map[string]any{
+							"name":        envVar.Name,
+							"description": envVar.Description,
+							"type":        "object",
+							"properties": map[string]any{
+								envVar.Name: map[string]any{
+									"type":        inferJSONType(string(envVar.Format)),
+									"description": envVar.Description,
+								},
+							},
+						}
+						if envVar.IsRequired {
+							configItem["required"] = []string{envVar.Name}
+						}
+						if envVar.Default != "" {
+							(configItem["properties"].(map[string]any)[envVar.Name].(map[string]any))["default"] = envVar.Default
+						}
+						configItems = append(configItems, configItem)
+					}
+				}
+			}
+		}
+
+		catalogSrv.Secrets = secrets
+		catalogSrv.Env = envVars
+		catalogSrv.Config = configItems
+
+		// Extract OAuth if present
+		// Note: The registry API doesn't have OAuth in the current schema
+		// This would need to be added if OAuth support is required
+
+		ociPackages = append(ociPackages, catalogSrv)
+	}
+
+	if len(ociPackages) == 0 {
+		return catalog.Server{}, fmt.Errorf("no OCI packages found for server")
+	}
+
+	// For now, return the first OCI package
+	// In the future, we might want to handle multiple packages differently
+	result := ociPackages[0]
+	result.Name = normalizeServerName(server.Name)
+
+	return result, nil
+}
+
+// normalizeServerName converts a registry server name to a valid catalog name
+// Example: io.github.user/server -> io-github-user-server
+func normalizeServerName(name string) string {
+	// Replace dots and slashes with hyphens
+	normalized := strings.ReplaceAll(name, ".", "-")
+	normalized = strings.ReplaceAll(normalized, "/", "-")
+	return normalized
+}
+
+// inferJSONType converts registry format to JSON schema type
+func inferJSONType(format string) string {
+	switch format {
+	case "number":
+		return "number"
+	case "boolean":
+		return "boolean"
+	case "filepath":
+		return "string"
+	default:
+		return "string"
+	}
+}
+
+func ResolveRegistry(ctx context.Context, registryClient registryapi.Client, value string) (Server, error) {
 	url, err := registryapi.ParseServerURL(value)
 	if err != nil {
-		return "", fmt.Errorf("failed to parse server URL %s: %w", value, err)
+		return Server{}, fmt.Errorf("failed to parse server URL %s: %w", value, err)
 	}
 
 	versions, err := registryClient.GetServerVersions(ctx, url)
 	if err != nil {
-		return "", fmt.Errorf("failed to get server versions from URL %s: %w", url.VersionsListURL(), err)
+		return Server{}, fmt.Errorf("failed to get server versions from URL %s: %w", url.VersionsListURL(), err)
 	}
 
 	if len(versions.Servers) == 0 {
-		return "", fmt.Errorf("no server versions found for URL %s", url.VersionsListURL())
+		return Server{}, fmt.Errorf("no server versions found for URL %s", url.VersionsListURL())
 	}
 
 	if url.IsLatestVersion() {
 		latestVersion, err := resolveLatestVersion(versions)
 		if err != nil {
-			return "", fmt.Errorf("failed to resolve latest version for server %s: %w", url.VersionsListURL(), err)
+			return Server{}, fmt.Errorf("failed to resolve latest version for server %s: %w", url.VersionsListURL(), err)
 		}
 		url = url.WithVersion(latestVersion)
 	}
 
-	var server *v0.ServerResponse
+	var serverResp *v0.ServerResponse
 	for _, version := range versions.Servers {
 		if version.Server.Version == url.Version {
-			server = &version
+			serverResp = &version
 			break
 		}
 	}
-	if server == nil {
-		return "", fmt.Errorf("server version not found")
+	if serverResp == nil {
+		return Server{}, fmt.Errorf("server version not found")
 	}
 
-	// check oci package exists
-	foundOCIPackage := false
-	for _, pkg := range server.Server.Packages {
-		if pkg.RegistryType == "oci" {
-			foundOCIPackage = true
-			break
-		}
-	}
-	if !foundOCIPackage {
-		return "", fmt.Errorf("oci package not found for server %s", url.String())
+	// Check for OCI packages and convert to catalog format
+	catalogServer, err := convertRegistryServerToCatalog(serverResp)
+	if err != nil {
+		return Server{}, fmt.Errorf("failed to convert registry server: %w", err)
 	}
 
-	return url.String(), nil
+	return Server{
+		Type:     ServerTypeRegistry,
+		Source:   url.String(),
+		Secrets:  "default",
+		Snapshot: &ServerSnapshot{Server: catalogServer},
+	}, nil
 }
 
 func ResolveSnapshot(ctx context.Context, ociService oci.Service, server Server) (*ServerSnapshot, error) {
@@ -609,7 +780,7 @@ func ResolveSnapshot(ctx context.Context, ociService oci.Service, server Server)
 	case ServerTypeImage:
 		return ResolveImageSnapshot(ctx, ociService, server.Image)
 	case ServerTypeRegistry:
-		// TODO(cody): add snapshot
+		// Snapshots for registry servers are resolved during ResolveRegistry
 		return nil, nil //nolint:nilnil
 	case ServerTypeRemote:
 		// TODO(bobby): add snapshot when you can add remotes directly from URL
