@@ -394,6 +394,17 @@ func ResolveServersFromString(ctx context.Context, registryClient registryapi.Cl
 		}}, nil
 	} else if v, ok := strings.CutPrefix(value, "catalog://"); ok {
 		return ResolveCatalogServers(ctx, dao, v)
+	} else if v, ok := strings.CutPrefix(value, "community://"); ok {
+		// Convert community://namespace/server[@version] to registry URL
+		registryURL, err := communityIdentifierToRegistryURL(v)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse community identifier: %w", err)
+		}
+		server, err := ResolveRegistry(ctx, registryClient, registryURL)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve community server: %w", err)
+		}
+		return []Server{server}, nil
 	} else if strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") { // Assume registry entry if it's a URL
 		server, err := ResolveRegistry(ctx, registryClient, value)
 		if err != nil {
@@ -725,6 +736,37 @@ func inferJSONType(format string) string {
 	default:
 		return "string"
 	}
+}
+
+// CommunityRegistryBaseURL is the base URL for the community MCP registry
+const CommunityRegistryBaseURL = "https://registry.modelcontextprotocol.io"
+
+// communityIdentifierToRegistryURL converts a community:// identifier to a full registry URL
+// Format: community://namespace/server-name[@version]
+// Examples:
+//   - community://io.github.user/myserver -> https://registry.modelcontextprotocol.io/v0/servers/io.github.user%2Fmyserver
+//   - community://io.github.user/myserver@1.0.0 -> https://registry.modelcontextprotocol.io/v0/servers/io.github.user%2Fmyserver/versions/1.0.0
+func communityIdentifierToRegistryURL(identifier string) (string, error) {
+	// Check for version suffix
+	var version string
+	if idx := strings.LastIndex(identifier, "@"); idx != -1 {
+		version = identifier[idx+1:]
+		identifier = identifier[:idx]
+	}
+
+	// Validate identifier has namespace/name format
+	if !strings.Contains(identifier, "/") {
+		return "", fmt.Errorf("invalid community identifier %q: expected format namespace/server-name", identifier)
+	}
+
+	// URL encode the identifier (the slash between namespace and name becomes %2F)
+	encodedIdentifier := strings.ReplaceAll(identifier, "/", "%2F")
+
+	// Build the URL
+	if version != "" {
+		return fmt.Sprintf("%s/v0/servers/%s/versions/%s", CommunityRegistryBaseURL, encodedIdentifier, version), nil
+	}
+	return fmt.Sprintf("%s/v0/servers/%s", CommunityRegistryBaseURL, encodedIdentifier), nil
 }
 
 func ResolveRegistry(ctx context.Context, registryClient registryapi.Client, value string) (Server, error) {

@@ -449,3 +449,45 @@ func TestInferJSONType(t *testing.T) {
 		})
 	}
 }
+
+func TestCommunityIdentifierToRegistryURL(t *testing.T) {
+	tests := []struct {
+		name        string
+		identifier  string
+		expected    string
+		expectError bool
+	}{
+		{
+			name:       "basic identifier",
+			identifier: "io.github.user/myserver",
+			expected:   "https://registry.modelcontextprotocol.io/v0/servers/io.github.user%2Fmyserver",
+		},
+		{
+			name:       "identifier with version",
+			identifier: "io.github.user/myserver@1.0.0",
+			expected:   "https://registry.modelcontextprotocol.io/v0/servers/io.github.user%2Fmyserver/versions/1.0.0",
+		},
+		{
+			name:       "complex namespace",
+			identifier: "io.github.idjohnson/vikunjamcp@1.0.26",
+			expected:   "https://registry.modelcontextprotocol.io/v0/servers/io.github.idjohnson%2Fvikunjamcp/versions/1.0.26",
+		},
+		{
+			name:        "invalid - no slash",
+			identifier:  "invalid-no-slash",
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := communityIdentifierToRegistryURL(tt.identifier)
+			if tt.expectError {
+				assert.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tt.expected, result)
+			}
+		})
+	}
+}
