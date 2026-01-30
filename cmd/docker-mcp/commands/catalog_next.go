@@ -276,25 +276,29 @@ func listCatalogNextServersCommand() *cobra.Command {
 	}
 
 	cmd := &cobra.Command{
-		Use:     "ls <oci-reference>",
+		Use:     "ls [oci-reference]",
 		Aliases: []string{"list"},
-		Short:   "List servers in a catalog",
-		Long: `List all servers in a catalog.
+		Short:   "List servers in a catalog or all catalogs",
+		Long: `List servers from a specific catalog or all catalogs.
 
+When no catalog reference is provided, lists servers from all catalogs with source information.
 Use --filter to search for servers matching a query (case-insensitive substring matching on server names).
 Filters use key=value format (e.g., name=github).`,
-		Example: `  # List all servers in a catalog
-  docker mcp catalog server ls mcp/docker-mcp-catalog:latest
+		Example: `  # List all servers from all catalogs
+  docker mcp catalog-next server ls
+
+  # List all servers in JSON format (useful for integration)
+  docker mcp catalog-next server ls --format json
+
+  # List servers in a specific catalog
+  docker mcp catalog-next server ls mcp/docker-mcp-catalog:latest
 
   # Filter servers by name
-  docker mcp catalog server ls mcp/docker-mcp-catalog:latest --filter name=github
-
-  # Combine multiple filters (using short flag)
-  docker mcp catalog server ls mcp/docker-mcp-catalog:latest -f name=slack -f name=github
+  docker mcp catalog-next server ls --filter name=github
 
   # Output in JSON format
-  docker mcp catalog server ls mcp/docker-mcp-catalog:latest --format json`,
-		Args: cobra.ExactArgs(1),
+  docker mcp catalog-next server ls mcp/docker-mcp-catalog:latest --format json`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			supported := slices.Contains(workingset.SupportedFormats(), opts.Format)
 			if !supported {
@@ -304,6 +308,11 @@ Filters use key=value format (e.g., name=github).`,
 			dao, err := db.New()
 			if err != nil {
 				return err
+			}
+
+			// If no catalog ref provided, list from all catalogs
+			if len(args) == 0 {
+				return catalognext.ListAllServers(cmd.Context(), dao, opts.Filters, workingset.OutputFormat(opts.Format))
 			}
 
 			return catalognext.ListServers(cmd.Context(), dao, args[0], opts.Filters, workingset.OutputFormat(opts.Format))
