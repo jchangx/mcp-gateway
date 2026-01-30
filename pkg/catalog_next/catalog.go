@@ -41,10 +41,11 @@ type CatalogSummary struct {
 
 // Source prefixes must be of the form "<prefix>:"
 const (
-	SourcePrefixWorkingSet    = "profile:"
-	SourcePrefixLegacyCatalog = "legacy-catalog:"
-	SourcePrefixOCI           = "oci:"
-	SourcePrefixUser          = "user:"
+	SourcePrefixWorkingSet        = "profile:"
+	SourcePrefixLegacyCatalog     = "legacy-catalog:"
+	SourcePrefixOCI               = "oci:"
+	SourcePrefixUser              = "user:"
+	SourcePrefixCommunityRegistry = "community-registry:"
 )
 
 type Server struct {
